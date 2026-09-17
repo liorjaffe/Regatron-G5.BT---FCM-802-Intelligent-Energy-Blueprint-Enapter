@@ -1,0 +1,741 @@
+blueprint_spec: "device/1.0"
+display_name: Regatron G5 Fuel Cell Load Bank
+description: >
+  Drives a Regatron TopCon G5.BT.9.80.338 bidirectional DC electronic load
+  (0-80 V / up to 338 A / 9 kW sink) as a programmable test bench for two
+  Intelligent Energy FCM 802 fuel cell modules on a hybrid DC bus (FCMs +
+  battery share the bus; the Regatron represents the load). Talks to a local
+  HTTP bridge (regatron_bridge.py) running next to the Regatron's own
+  Regatron.G5.Api.dll driver. Runs CC, CV, CP, polarization-sweep and
+  load-step tests at configurable percentages of the fuel cell bank's rated
+  output. Measurements are bus/load-side (see bus_voltage_v / load_current_a
+  descriptions) - not a direct read of FCM branch output, which needs the
+  separate branch current sensors described in the project's parameter
+  traceability table. Includes a POC backoff behaviour that stands in for
+  the battery on a standalone bench with no battery present; see README
+  "Hybrid system" before running unattended tests.
+icon: enapter-flash
+license: MIT
+author: your-github-username
+support:
+  url: "https://developers.enapter.com/docs/tutorial/introduction"
+  email: ""
+
+# Virtual UCM (runs on the Enapter Gateway, talks HTTP over the LAN to the
+# bridge script sitting next to the Regatron's .NET driver).
+communication_modules:
+  bridge:
+    product: ENP-VIRTUAL
+    lua_file: firmware.lua
+
+# ---------------------------------------------------------------------------
+# PROPERTIES - slow-changing configuration, editable via the config commands
+# ---------------------------------------------------------------------------
+properties:
+  regatron_model:
+    display_name: Regatron Model
+    type: string
+  regatron_serial_number:
+    display_name: Regatron Serial Number
+    type: string
+  bridge_address:
+    display_name: Bridge Address
+    description: "http://<ip>:<port> of the regatron_bridge.py service."
+    type: string
+  fc_model:
+    display_name: Fuel Cell Model
+    type: string
+  fc_units:
+    display_name: Fuel Cell Units in Bank
+    type: integer
+  fc_wiring:
+    display_name: Fuel Cell Wiring
+    type: string
+    enum:
+      - parallel
+      - series
+  fc_rated_power_w:
+    display_name: Combined Rated Power
+    type: float
+    unit: watt
+  fc_nominal_voltage_v:
+    display_name: Combined Nominal Voltage
+    type: float
+    unit: volt
+  fc_min_voltage_v:
+    display_name: Voltage Floor (Protective Cutoff)
+    description: "Delayed Start Under-Voltage / sustained-undervoltage abort line."
+    type: float
+    unit: volt
+  fc_max_voltage_v:
+    display_name: Voltage Ceiling (Protective Cutoff)
+    description: "Ahead of the FCM's own Delayed Stop Over-Voltage (54V/60s)."
+    type: float
+    unit: volt
+  fc_max_current_a:
+    display_name: Combined FC Current Ceiling
+    description: "2 x configured Output Current Limit per module."
+    type: float
+    unit: amp
+  ramp_rate_a_per_s:
+    display_name: Current Ramp Rate
+    type: float
+    unit: amp
+  poc_backoff_enabled:
+    display_name: POC Backoff Enabled
+    description: >
+      Bench-side stand-in for the battery that covers the FCM during its own
+      POC on the deployed hybrid bus. Leave on for standalone bench tests.
+    type: boolean
+  poc_backoff_current_a:
+    display_name: POC Backoff Current
+    description: Held during a suspected POC. Keep comfortably above 4 A.
+    type: float
+    unit: amp
+  poc_max_duration_s:
+    display_name: POC Max Duration
+    description: Longer than this is treated as a real fault, not a POC.
+    type: float
+    unit: second
+
+# ---------------------------------------------------------------------------
+# TELEMETRY - fast-changing measurements and test-sequencer state
+# ---------------------------------------------------------------------------
+telemetry:
+  status:
+    display_name: Bench Status
+    type: string
+    enum:
+      - disconnected
+      - idle
+      - ramping
+      - holding
+      - stepping
+      - poc_backoff
+      - resting
+      - stopping
+      - fault
+  bridge_online:
+    display_name: Bridge Reachable
+    type: boolean
+  regatron_connected:
+    display_name: Regatron Connected
+    type: boolean
+  regatron_has_errors:
+    display_name: Regatron Has Errors
+    type: boolean
+  regatron_has_warnings:
+    display_name: Regatron Has Warnings
+    type: boolean
+  output_on:
+    display_name: Output Enabled
+    type: boolean
+  precharge_acknowledged:
+    display_name: Precharge Acknowledged
+    description: >
+      Per-session safety checklist gate - not persisted across a restart.
+      Must be set before any command that energizes the load.
+    type: boolean
+  controller_mode:
+    display_name: Controller Mode
+    type: string
+    enum:
+      - idle
+      - cc
+      - cv
+  bus_voltage_v:
+    display_name: Bus Voltage
+    description: >
+      Voltage at the Regatron's own sense leads - the shared hybrid bus the
+      load sits on, not the FCM's own terminals. Not the same thing as true
+      FCM output; see the blueprint description and README.
+    type: float
+    unit: volt
+  load_current_a:
+    display_name: Load Current
+    description: >
+      Current the Regatron itself is drawing. On the deployed hybrid bus
+      this is demand only, not fuel-cell output - the battery may also be
+      sourcing or absorbing current on the same bus. Only equivalent to FCM
+      output on an isolated bench test with no battery present.
+    type: float
+    unit: amp
+  load_power_w:
+    display_name: Load Power
+    type: float
+    unit: watt
+  setpoint_kind:
+    display_name: Active Setpoint
+    type: string
+    enum:
+      - none
+      - current_a
+      - voltage_v
+      - power_w
+  setpoint_value:
+    display_name: Setpoint Value
+    type: float
+  test_type:
+    display_name: Test Type
+    type: string
+    enum:
+      - none
+      - manual
+      - cc
+      - cv
+      - cp
+      - polarization
+      - load_step
+  step_index:
+    display_name: Step Index
+    type: integer
+  step_total:
+    display_name: Step Count
+    type: integer
+  step_elapsed_s:
+    display_name: Step Elapsed
+    type: float
+    unit: second
+  test_elapsed_s:
+    display_name: Test Elapsed
+    type: float
+    unit: second
+  fault_reason:
+    display_name: Fault Reason
+    type: string
+  last_incident:
+    display_name: Last Regatron Incident
+    type: string
+  poc_active:
+    display_name: POC Backoff Active
+    description: >
+      True while the bench is backing the load off in place of the battery
+      that would normally cover the FCM during its own Performance
+      Optimisation Cycle on the deployed hybrid bus.
+    type: boolean
+  poc_event_count:
+    display_name: POC Events (This Test)
+    type: integer
+  poc_last_duration_s:
+    display_name: Last POC Duration
+    type: float
+    unit: second
+
+# ---------------------------------------------------------------------------
+# ALERTS
+# ---------------------------------------------------------------------------
+alerts:
+  bridge_unreachable:
+    severity: error
+    display_name: Bridge Unreachable
+    description: >
+      The Lua blueprint could not reach regatron_bridge.py. The bridge's own
+      dead-man timer will force the Regatron output off if this persists.
+  overvoltage:
+    severity: error
+    display_name: Regatron Overvoltage
+    description: Bus voltage reached the Regatron hardware's absolute 80 V window.
+  overcurrent:
+    severity: error
+    display_name: Regatron Overcurrent
+    description: Bus current reached the Regatron hardware's absolute current limit.
+  overpower:
+    severity: error
+    display_name: Regatron Overpower
+    description: Bus power reached the Regatron hardware's absolute power limit.
+  fc_voltage_floor:
+    severity: error
+    display_name: Sustained Undervoltage
+    description: >
+      Bus voltage sagged to/below the configured floor for longer than the
+      qualification window. The test was aborted and the output switched
+      off to protect the fuel cell stack from starvation / reverse-cell
+      conditions. A brief blip does not trip this - only a sustained sag.
+  fc_overvoltage:
+    severity: error
+    display_name: Sustained Overvoltage
+    description: >
+      Bus voltage reached the configured FC ceiling (Delayed Stop
+      Over-Voltage) for longer than the qualification window - tripped
+      ahead of the FCM's own 60s automatic stop so the bench, not the
+      module, ends the test in a controlled way.
+  fc_overcurrent:
+    severity: error
+    display_name: FC Combined Overcurrent
+    description: >
+      Load current reached the combined FC capability ceiling (2x the
+      configured Output Current Limit per module). Continuing risks pulling
+      excess current from the battery and can shut the fuel cell down.
+  regatron_incident:
+    severity: error
+    display_name: Regatron Incident Latched
+    description: The Regatron reported a fault. Acknowledge it before retrying.
+  output_forced_off:
+    severity: warning
+    display_name: Output Forced Off
+    description: Watchdog, fault handler or emergency stop switched the output off.
+  poc_window:
+    severity: info
+    display_name: POC Backoff Active
+    description: >
+      A sharp, unexplained current dip was detected - most likely the FCM's
+      own Performance Optimisation Cycle. The bench is backing the load off
+      in place of the battery that covers this on the deployed hybrid bus,
+      and will resume the test target once the dip clears. Not a fault by
+      itself; see poc_timeout for when it is treated as one.
+  poc_timeout:
+    severity: error
+    display_name: POC Backoff Did Not Recover
+    description: >
+      The suspected POC persisted well beyond its ~12s spec (see Poc Max
+      Duration). Treated as a real fault rather than a normal POC and the
+      test was aborted - check the module before retrying.
+
+# ---------------------------------------------------------------------------
+# COMMAND GROUPS
+# ---------------------------------------------------------------------------
+command_groups:
+  safety:
+    display_name: Safety
+  manual:
+    display_name: Manual Control
+  tests:
+    display_name: Fuel Cell Tests
+  config:
+    display_name: Configuration
+
+# ---------------------------------------------------------------------------
+# COMMANDS
+# ---------------------------------------------------------------------------
+commands:
+
+  # --- safety -----------------------------------------------------------
+  emergency_stop:
+    display_name: EMERGENCY STOP
+    description: Immediately switches the Regatron output off and latches a fault.
+    group: safety
+    ui:
+      icon: alert-octagon
+      quick_access: true
+
+  clear_fault:
+    display_name: Clear Fault / Acknowledge
+    description: Clears a latched fault and the Regatron's incident list so testing can resume.
+    group: safety
+    ui:
+      icon: check-circle-outline
+
+  acknowledge_precharge:
+    display_name: Acknowledge Precharge Complete
+    description: >
+      Confirms the precharge / isolation contactor sequence was completed
+      before connecting the load to the live bus. Required once per
+      blueprint session before any command that energizes the load - not
+      persisted across a restart, on purpose.
+    group: safety
+    ui:
+      icon: shield-check-outline
+
+  # --- manual -------------------------------------------------------------
+  set_manual_cc:
+    display_name: Manual CC Setpoint
+    description: Jog the load to a fixed current. Give either percent_of_rated or current_a.
+    group: manual
+    confirmation:
+      severity: warning
+      title: Energizing the Load
+      description: This applies a real current sink to the fuel cell immediately.
+    ui:
+      icon: current-dc
+    arguments:
+      percent_of_rated:
+        display_name: "% of Rated Current"
+        type: float
+        min: 0
+        max: 120
+      current_a:
+        display_name: Absolute Current (A)
+        description: Overrides percent_of_rated if set.
+        type: float
+        min: 0
+        max: 338
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        description: Defaults to the configured fuel cell voltage floor.
+        type: float
+
+  set_manual_cv:
+    display_name: Manual CV Setpoint
+    description: Jog the load to a fixed voltage. Give either percent_of_nominal or voltage_v.
+    group: manual
+    confirmation:
+      severity: warning
+      title: Energizing the Load
+      description: >
+        Regatron-CV against an already-regulated FCM output can fight the
+        module's own regulator. Keep the current ceiling tight.
+    ui:
+      icon: sine-wave
+    arguments:
+      percent_of_nominal:
+        display_name: "% of Nominal Voltage"
+        type: float
+        min: 0
+        max: 150
+      voltage_v:
+        display_name: Absolute Voltage (V)
+        type: float
+        min: 0
+        max: 80
+      current_ceiling_a:
+        display_name: Current Ceiling (A)
+        required: true
+        type: float
+        min: 0
+        max: 338
+
+  set_manual_cp:
+    display_name: Manual CP Setpoint
+    description: >
+      Software constant-power: the bridge is driven in CC mode with the
+      current target recomputed every tick as power / measured voltage.
+    group: manual
+    confirmation:
+      severity: warning
+      title: Energizing the Load
+      description: This applies a real current sink to the fuel cell immediately.
+    ui:
+      icon: lightning-bolt
+    arguments:
+      percent_of_rated:
+        display_name: "% of Rated Power"
+        type: float
+        min: 0
+        max: 120
+      power_w:
+        display_name: Absolute Power (W)
+        type: float
+        min: 0
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        type: float
+
+  output_off:
+    display_name: Output Off
+    description: Switches the Regatron output off without latching a fault.
+    group: manual
+    ui:
+      icon: power-plug-off
+      quick_access: true
+
+  # --- tests ----------------------------------------------------------------
+  start_cc_test:
+    display_name: Start CC Test
+    description: Holds a constant current for duration_s, logging the whole way.
+    group: tests
+    confirmation:
+      severity: warning
+      title: Start CC Test
+      description: This energizes the load and holds it for the configured duration.
+    ui:
+      icon: current-dc
+    arguments:
+      percent_of_rated:
+        display_name: "% of Rated Current"
+        type: float
+        min: 0
+        max: 120
+      current_a:
+        display_name: Absolute Current (A)
+        type: float
+        min: 0
+        max: 338
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        type: float
+      duration_s:
+        display_name: Hold Duration (s)
+        type: integer
+        default: 300
+
+  start_cv_test:
+    display_name: Start CV Test
+    description: Holds a constant voltage for duration_s with a current ceiling.
+    group: tests
+    confirmation:
+      severity: warning
+      title: Start CV Test
+      description: This energizes the load and holds it for the configured duration.
+    ui:
+      icon: sine-wave
+    arguments:
+      percent_of_nominal:
+        display_name: "% of Nominal Voltage"
+        type: float
+        min: 0
+        max: 150
+      voltage_v:
+        display_name: Absolute Voltage (V)
+        type: float
+        min: 0
+        max: 80
+      current_ceiling_a:
+        display_name: Current Ceiling (A)
+        required: true
+        type: float
+        min: 0
+        max: 338
+      duration_s:
+        display_name: Hold Duration (s)
+        type: integer
+        default: 300
+
+  start_cp_test:
+    display_name: Start CP Test
+    description: Holds a constant power for duration_s (software CP loop).
+    group: tests
+    confirmation:
+      severity: warning
+      title: Start CP Test
+      description: This energizes the load and holds it for the configured duration.
+    ui:
+      icon: lightning-bolt
+    arguments:
+      percent_of_rated:
+        display_name: "% of Rated Power"
+        type: float
+        min: 0
+        max: 120
+      power_w:
+        display_name: Absolute Power (W)
+        type: float
+        min: 0
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        type: float
+      duration_s:
+        display_name: Hold Duration (s)
+        type: integer
+        default: 300
+
+  start_polarization_curve:
+    display_name: Start Polarization Sweep
+    description: >
+      Steps current from from_percent to to_percent in step_percent
+      increments, dwelling dwell_s at each point to reach steady state.
+      Classic V-I sweep. Enable round_trip to sweep back down afterwards on
+      the same points and check for hysteresis near the limits.
+    group: tests
+    confirmation:
+      severity: warning
+      title: Start Polarization Sweep
+      description: This runs an unattended multi-point sweep. Stay nearby.
+    ui:
+      icon: chart-line
+      quick_access: true
+    arguments:
+      from_percent:
+        display_name: Start (%)
+        type: float
+        default: 10
+      to_percent:
+        display_name: End (%)
+        type: float
+        default: 100
+      step_percent:
+        display_name: Step Size (%)
+        type: float
+        default: 10
+      dwell_s:
+        display_name: Dwell per Step (s)
+        type: integer
+        default: 90
+      round_trip:
+        display_name: Sweep Back Down Too
+        description: Repeats the same points in reverse afterwards - checks for hysteresis near the limits.
+        type: boolean
+        default: false
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        type: float
+
+  start_load_step:
+    display_name: Start Load Step / Transient Test
+    description: >
+      Alternates between low_percent and high_percent for cycles repetitions,
+      to characterize dynamic / load-following response.
+    group: tests
+    confirmation:
+      severity: warning
+      title: Start Load Step Test
+      description: This runs an unattended repeating step test. Stay nearby.
+    ui:
+      icon: stairs
+    arguments:
+      low_percent:
+        display_name: Low Level (%)
+        type: float
+        default: 20
+      high_percent:
+        display_name: High Level (%)
+        type: float
+        default: 80
+      low_dwell_s:
+        display_name: Low Dwell (s)
+        type: integer
+        default: 60
+      high_dwell_s:
+        display_name: High Dwell (s)
+        type: integer
+        default: 60
+      cycles:
+        display_name: Cycles
+        type: integer
+        default: 5
+      voltage_floor_v:
+        display_name: Voltage Floor (V)
+        type: float
+
+  stop_test:
+    display_name: Stop Test
+    description: Ramps the current down at the configured rate, then switches the output off.
+    group: tests
+    ui:
+      icon: stop-circle-outline
+      quick_access: true
+
+  # --- config -----------------------------------------------------------
+  configure_bridge:
+    display_name: Configure Bridge
+    group: config
+    populate_values_command: read_configuration
+    ui:
+      icon: lan-connect
+    arguments:
+      bridge_ip:
+        display_name: Bridge IP Address
+        required: true
+        type: string
+      bridge_port:
+        display_name: Bridge Port
+        required: true
+        type: integer
+        default: 8765
+      bridge_token:
+        display_name: Bridge Auth Token
+        description: Must match API_TOKEN in regatron_bridge.py. Leave blank if unset.
+        type: string
+
+  configure_fuel_cell:
+    display_name: Configure Fuel Cell Bank
+    description: >
+      Numbers below reflect the 2026-09-16 parameter brief for the 48V
+      factory configuration. CONFIRM against the installed modules' actual
+      configuration before relying on them - all of these are
+      factory-settable on the FCM side.
+    group: config
+    populate_values_command: read_configuration
+    ui:
+      icon: fuel-cell
+    arguments:
+      fc_model:
+        display_name: Fuel Cell Model
+        type: string
+        default: "Intelligent Energy FCM 802"
+      fc_units:
+        display_name: Units in Bank
+        type: integer
+        default: 2
+      fc_wiring:
+        display_name: Wiring
+        type: string
+        enum:
+          - parallel
+          - series
+        default: parallel
+      fc_rated_power_w:
+        display_name: Combined Rated Power (W)
+        description: >
+          2.4 kW / 50 A per module (>95% duty, 25C, BOL, <1500m). Combined
+          4.8 kW is UNTESTED - two-module current sharing not yet
+          characterized.
+        type: float
+        default: 4800
+      fc_nominal_voltage_v:
+        display_name: Combined Nominal Voltage (V)
+        description: "Target Output Voltage the FCM regulates the bus to (52V; 48V is only the factory default for this parameter - verify)."
+        type: float
+        default: 52
+      fc_min_voltage_v:
+        display_name: Voltage Floor (V)
+        description: "Delayed Start Under-Voltage / abort-on-sustained-undervoltage line."
+        type: float
+        default: 48
+      fc_undervoltage_qualify_s:
+        display_name: Undervoltage Qualify Time (s)
+        description: Must sag this long before it counts as sustained, not a blip.
+        type: float
+        default: 3
+      fc_max_voltage_v:
+        display_name: Voltage Ceiling (V)
+        description: "Delayed Stop Over-Voltage on the FCM's own side (60s qualification there) - trip before that."
+        type: float
+        default: 54
+      fc_overvoltage_qualify_s:
+        display_name: Overvoltage Qualify Time (s)
+        description: Comfortably inside the FCM's own 60s stop qualification.
+        type: float
+        default: 15
+      fc_max_current_a:
+        display_name: Combined Current Ceiling (A)
+        description: "2 x 80A configured Output Current Limit per module (48V config)."
+        type: float
+        default: 160
+      fc_overcurrent_qualify_s:
+        display_name: Overcurrent Qualify Time (s)
+        type: float
+        default: 3
+      low_current_warning_a:
+        display_name: Low Current Warning Line (A)
+        description: "Soft warning only. FCM-802 enters standby below 4A for 20s."
+        type: float
+        default: 6
+      ramp_rate_a_per_s:
+        display_name: Current Ramp Rate (A/s)
+        type: float
+        default: 5
+      poc_backoff_enabled:
+        display_name: POC Backoff Enabled
+        description: >
+          Stand-in for the battery that covers the FCM during POC on the
+          deployed hybrid bus. Turn off only if a real battery/PSU is
+          present on this bench too - see README "Hybrid system".
+        type: boolean
+        default: true
+      poc_backoff_current_a:
+        display_name: POC Backoff Current (A)
+        description: "Held during a suspected POC. Keep above the FCM-802's 4A/20s under-current stop threshold."
+        type: float
+        default: 8
+      poc_backoff_hold_s:
+        display_name: POC Backoff Hold Time (s)
+        description: >
+          How long to hold the backoff current before probing whether the
+          real target is deliverable again. Just past the ~12s POC spec, so
+          a genuine POC has time to finish before the first probe.
+        type: float
+        default: 13
+      poc_max_duration_s:
+        display_name: POC Max Duration (s)
+        description: >
+          Episode-wide ceiling, spanning any backoff/probe cycling. Spec is
+          up to ~12s for one POC; longer than this overall is treated as a
+          real fault, not a normal POC. Must exceed poc_backoff_hold_s.
+        type: float
+        default: 20
+
+  read_configuration:
+    display_name: Read Configuration
+    group: config
+    ui:
+      icon: eye-outline
