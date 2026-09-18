@@ -1,6 +1,6 @@
 # Regatron G5 Fuel Cell Load Bank — Enapter Blueprint
 
-Turns your **Regatron TopCon G5.BT (0–80 V, ±338 A, ±9 kW) into a
+Turns your Regatron TopCon G5.BT (0–80 V, ±338 A, ±9 kW) into a
 programmable test bench for two **Intelligent Energy FCM 802** modules
 sharing a hybrid DC bus with a battery, driven from the Enapter Cloud.
 
